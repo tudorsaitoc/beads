@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // NormalizeMetadataValue converts metadata values to a validated JSON string.
@@ -321,4 +322,74 @@ func ApplyMetadataEdits(existing json.RawMessage, setFlags, unsetFlags []string)
 func MetadataEditValue(s string) json.RawMessage {
 	b, _ := json.Marshal(s)
 	return json.RawMessage(b)
+}
+
+// PreserveRefineryDecisionAt protects the first nonempty terminal clock inside
+// the issue mutation transaction. Other metadata keeps its normal semantics.
+// The boolean is true only when the caller must replace the incoming value.
+func PreserveRefineryDecisionAt(existing json.RawMessage, value interface{}) (json.RawMessage, bool, error) {
+	const key = "refinery_decision_at"
+	var incoming json.RawMessage
+	switch v := value.(type) {
+	case string:
+		incoming = json.RawMessage(v)
+	case []byte:
+		incoming = json.RawMessage(v)
+	case json.RawMessage:
+		incoming = v
+	default:
+		return nil, false, fmt.Errorf("metadata must be string, []byte, or json.RawMessage, got %T", value)
+	}
+	var prior struct {
+		Clock json.RawMessage `json:"refinery_decision_at"`
+	}
+	if len(existing) != 0 {
+		if err := json.Unmarshal(existing, &prior); err != nil && !json.Valid(existing) {
+			return nil, false, fmt.Errorf("invalid existing metadata: %w", err)
+		}
+	}
+	var first string
+	if len(prior.Clock) != 0 {
+		if err := json.Unmarshal(prior.Clock, &first); err != nil {
+			return nil, false, fmt.Errorf("metadata.%s must be a string: %w", key, err)
+		}
+	}
+	var next map[string]json.RawMessage
+	if err := json.Unmarshal(incoming, &next); err != nil {
+		if !json.Valid(incoming) {
+			return nil, false, fmt.Errorf("metadata is not valid JSON: %w", err)
+		}
+		if first != "" {
+			return nil, false, fmt.Errorf("metadata must remain an object while %s is set", key)
+		}
+		return nil, false, nil
+	}
+	if first != "" {
+		var candidate string
+		if raw, ok := next[key]; ok && json.Unmarshal(raw, &candidate) == nil && candidate == first {
+			return nil, false, nil
+		}
+		if next == nil {
+			next = make(map[string]json.RawMessage, 1)
+		}
+		next[key] = prior.Clock
+		raw, err := json.Marshal(next)
+		return json.RawMessage(raw), true, err
+	}
+	if raw, ok := next[key]; ok {
+		var candidate string
+		if err := json.Unmarshal(raw, &candidate); err != nil {
+			return nil, false, fmt.Errorf("metadata.%s must be a string: %w", key, err)
+		}
+		if candidate != "" {
+			stamp, err := time.Parse(time.RFC3339Nano, candidate)
+			if err != nil {
+				return nil, false, fmt.Errorf("metadata.%s must be an RFC3339 UTC timestamp", key)
+			}
+			if _, offset := stamp.Zone(); offset != 0 {
+				return nil, false, fmt.Errorf("metadata.%s must be an RFC3339 UTC timestamp", key)
+			}
+		}
+	}
+	return nil, false, nil
 }

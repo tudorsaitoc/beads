@@ -658,6 +658,31 @@ func (t *doltTransaction) UpdateIssue(ctx context.Context, id string, updates ma
 	return nil
 }
 
+// UpdateIssueWithEvents is an optional transaction capability for callers whose
+// guarded state transition and canonical audit history must commit together.
+// UpdateIssue stays silent for structural/demotion callers.
+func (t *doltTransaction) UpdateIssueWithEvents(ctx context.Context, id string, updates map[string]interface{}, actor string) error {
+	table, eventTable := "issues", "events"
+	if t.isActiveWisp(ctx, id) {
+		table, eventTable = "wisps", "wisp_events"
+	}
+	if rawMeta, ok := updates["metadata"]; ok {
+		metadataStr, err := storage.NormalizeMetadataValue(rawMeta)
+		if err != nil {
+			return fmt.Errorf("invalid metadata: %w", err)
+		}
+		if err := validateMetadataIfConfigured(json.RawMessage(metadataStr)); err != nil {
+			return err
+		}
+	}
+	if _, err := issueops.UpdateIssueInTx(ctx, t.txFor(table), id, updates, actor); err != nil {
+		return wrapExecError("update issue with events in tx", err)
+	}
+	t.dirty.MarkDirty(table)
+	t.dirty.MarkDirty(eventTable)
+	return nil
+}
+
 func (t *doltTransaction) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
 	table := "issues"
 	eventTable := "events"
@@ -956,6 +981,11 @@ func (t *doltTransaction) AddLabel(ctx context.Context, issueID, label, actor st
 		return wrapExecError("add label in tx", err)
 	}
 	t.dirty.MarkDirty(table)
+	if table == "wisp_labels" {
+		t.dirty.MarkDirty("wisps")
+	} else {
+		t.dirty.MarkDirty("issues")
+	}
 	t.dirty.MarkDirty(eventTable)
 	return nil
 }
@@ -996,6 +1026,11 @@ func (t *doltTransaction) RemoveLabel(ctx context.Context, issueID, label, actor
 		return wrapExecError("remove label in tx", err)
 	}
 	t.dirty.MarkDirty(table)
+	if table == "wisp_labels" {
+		t.dirty.MarkDirty("wisps")
+	} else {
+		t.dirty.MarkDirty("issues")
+	}
 	t.dirty.MarkDirty(eventTable)
 	return nil
 }

@@ -76,6 +76,18 @@ func (t *embeddedTransaction) UpdateIssue(ctx context.Context, id string, update
 	return err
 }
 
+// UpdateIssueWithEvents exposes the eventful update as an optional capability,
+// routing both the row and its audit table to the same transaction.
+func (t *embeddedTransaction) UpdateIssueWithEvents(ctx context.Context, id string, updates map[string]interface{}, actor string) error {
+	issueTable, _, eventTable, _ := issueops.WispTableRouting(issueops.IsActiveWispInTx(ctx, t.tx, id))
+	if _, err := issueops.UpdateIssueInTx(ctx, t.tx, id, updates, actor); err != nil {
+		return err
+	}
+	t.dirty.MarkDirty(issueTable)
+	t.dirty.MarkDirty(eventTable)
+	return nil
+}
+
 func (t *embeddedTransaction) CloseIssue(ctx context.Context, id string, reason string, actor string, session string) error {
 	t.dirty.MarkDirty("issues")
 	t.dirty.MarkDirty("events")
@@ -172,13 +184,27 @@ func (t *embeddedTransaction) GetDependencyRecords(ctx context.Context, issueID 
 }
 
 func (t *embeddedTransaction) AddLabel(ctx context.Context, issueID, label, actor string) error {
-	t.dirty.MarkDirty("labels")
-	return issueops.AddLabelInTx(ctx, t.tx, "", "", issueID, label, actor)
+	isWisp := issueops.IsActiveWispInTx(ctx, t.tx, issueID)
+	issueTable, labelTable, eventTable, _ := issueops.WispTableRouting(isWisp)
+	if err := issueops.AddLabelInTx(ctx, t.tx, labelTable, eventTable, issueID, label, actor); err != nil {
+		return err
+	}
+	t.dirty.MarkDirty(issueTable)
+	t.dirty.MarkDirty(labelTable)
+	t.dirty.MarkDirty(eventTable)
+	return nil
 }
 
 func (t *embeddedTransaction) RemoveLabel(ctx context.Context, issueID, label, actor string) error {
-	t.dirty.MarkDirty("labels")
-	return issueops.RemoveLabelInTx(ctx, t.tx, "", "", issueID, label, actor)
+	isWisp := issueops.IsActiveWispInTx(ctx, t.tx, issueID)
+	issueTable, labelTable, eventTable, _ := issueops.WispTableRouting(isWisp)
+	if err := issueops.RemoveLabelInTx(ctx, t.tx, labelTable, eventTable, issueID, label, actor); err != nil {
+		return err
+	}
+	t.dirty.MarkDirty(issueTable)
+	t.dirty.MarkDirty(labelTable)
+	t.dirty.MarkDirty(eventTable)
+	return nil
 }
 
 func (t *embeddedTransaction) GetLabels(ctx context.Context, issueID string) ([]string, error) {

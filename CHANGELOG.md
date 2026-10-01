@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional genuine single-session control transactions.**
+  `RunInSingleTransaction` commits or rolls back durable and ignored/wisp
+  mutations together, including their canonical events. It restores the
+  pooled session's history-commit setting and never replays a callback after
+  a successful SQL commit followed by history/session-finalization failure.
+  Legacy multi-session transactions remain unchanged.
+- **Common writers preserve the first refinery terminal receipt.**
+  Metadata merge, replacement, unset, import and transactional updates cannot
+  replace or remove a nonempty `refinery_decision_at`. New receipts must be
+  RFC3339 UTC strings. Label mutations take the same row-lock collision
+  boundary as guarded control updates, including ignored/wisp subjects.
+  Label-only changes preserve `updated_at`, so an equal-timestamp import can
+  still contribute metadata/labels without losing the current human goal.
+
 - **Replica-aware leases: `bd reclaim` no longer reverts a lease another
   replica granted** (wy-jpd3.7). A lease is only meaningful on the replica that
   granted it — the other machine's liveness view is stale by up to one sync
