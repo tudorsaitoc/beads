@@ -396,25 +396,39 @@ func HasMergeOps(updates map[string]interface{}) bool {
 
 // ResolveMergeOps rewrites merge-operation keys into concrete column values
 // using oldIssue, which the caller read in the same mutation transaction.
-// Returns the input map unchanged when no operation keys are present;
-// otherwise returns a copy so the caller's map is not mutated.
+// Returns a copy only for operation keys or a protected terminal clock change;
+// the caller's map is never mutated.
 func ResolveMergeOps(oldIssue *types.Issue, updates map[string]interface{}) (map[string]interface{}, error) {
-	if !HasMergeOps(updates) {
-		return updates, nil
-	}
-
-	resolved := make(map[string]interface{}, len(updates))
-	for k, v := range updates {
-		if !isMergeOpKey(k) {
-			resolved[k] = v
+	mergeOps := HasMergeOps(updates)
+	resolved := updates
+	if mergeOps {
+		resolved = make(map[string]interface{}, len(updates))
+		for k, v := range updates {
+			if !isMergeOpKey(k) {
+				resolved[k] = v
+			}
+		}
+		if err := resolveMetadataMergeOps(oldIssue, updates, resolved); err != nil {
+			return nil, err
+		}
+		if err := resolveNotesAppendOp(oldIssue, updates, resolved); err != nil {
+			return nil, err
 		}
 	}
-
-	if err := resolveMetadataMergeOps(oldIssue, updates, resolved); err != nil {
-		return nil, err
-	}
-	if err := resolveNotesAppendOp(oldIssue, updates, resolved); err != nil {
-		return nil, err
+	if value, ok := resolved["metadata"]; ok {
+		raw, changed, err := storage.PreserveRefineryDecisionAt(oldIssue.Metadata, value)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			if !mergeOps {
+				resolved = make(map[string]interface{}, len(updates))
+				for k, v := range updates {
+					resolved[k] = v
+				}
+			}
+			resolved["metadata"] = raw
+		}
 	}
 	return resolved, nil
 }

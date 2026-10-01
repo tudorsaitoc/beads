@@ -109,6 +109,11 @@ func InsertIssueIntoTable(ctx context.Context, tx DBTX, table string, issue *typ
 
 //nolint:gosec // G201: table is a hardcoded constant ("issues" or "wisps")
 func insertIssueIntoTable(ctx context.Context, tx DBTX, table string, issue *types.Issue, rejectStaleUpdate bool) error {
+	var err error
+	issue, err = ProtectRefineryClockForUpsert(ctx, tx, table, issue)
+	if err != nil {
+		return err
+	}
 	return executeIssueInsert(ctx, tx, table, issue,
 		"ON DUPLICATE KEY UPDATE\n\t\t\t"+issueUpsertAssignments(table, rejectStaleUpdate))
 }
@@ -619,4 +624,32 @@ func FormatJSONStringArray(arr []string) string {
 		return ""
 	}
 	return string(data)
+}
+
+// ProtectRefineryClockForUpsert preserves the first nonempty decision clock
+// even when supported import/upsert writers replace an issue's metadata.
+func ProtectRefineryClockForUpsert(ctx context.Context, tx DBTX, table string, issue *types.Issue) (*types.Issue, error) {
+	if table != "issues" && table != "wisps" {
+		return nil, fmt.Errorf("unsupported issue table %q", table)
+	}
+	var existing []byte
+	//nolint:gosec // G201: table is validated against two hardcoded constants
+	err := tx.QueryRowContext(ctx, fmt.Sprintf("SELECT metadata FROM %s WHERE id = ?", table), issue.ID).Scan(&existing)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("read issue metadata for upsert: %w", err)
+	}
+	incoming := issue.Metadata
+	if len(incoming) == 0 {
+		incoming = json.RawMessage("null")
+	}
+	raw, changed, err := storage.PreserveRefineryDecisionAt(existing, incoming)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return issue, nil
+	}
+	protected := *issue
+	protected.Metadata = raw
+	return &protected, nil
 }

@@ -962,6 +962,11 @@ func (t *doltTransaction) AddLabel(ctx context.Context, issueID, label, actor st
 		return wrapExecError("add label in tx", err)
 	}
 	t.dirty.MarkDirty(table)
+	if table == "wisp_labels" {
+		t.dirty.MarkDirty("wisps")
+	} else {
+		t.dirty.MarkDirty("issues")
+	}
 	t.dirty.MarkDirty(eventTable)
 	return nil
 }
@@ -1002,6 +1007,11 @@ func (t *doltTransaction) RemoveLabel(ctx context.Context, issueID, label, actor
 		return wrapExecError("remove label in tx", err)
 	}
 	t.dirty.MarkDirty(table)
+	if table == "wisp_labels" {
+		t.dirty.MarkDirty("wisps")
+	} else {
+		t.dirty.MarkDirty("issues")
+	}
 	t.dirty.MarkDirty(eventTable)
 	return nil
 }

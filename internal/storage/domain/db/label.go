@@ -54,6 +54,9 @@ func (r *labelSQLRepositoryImpl) Insert(ctx context.Context, issueID, label, act
 	); err != nil {
 		return fmt.Errorf("db: LabelSQLRepository.Insert %s/%s: %w", issueID, label, err)
 	}
+	if err := issueops.TouchIssueRowLock(ctx, r.runner, issueID, opts.UseWispsTable); err != nil {
+		return err
+	}
 	return r.events.Record(ctx, domain.Event{
 		IssueID:  issueID,
 		Type:     types.EventLabelAdded,
@@ -76,6 +79,9 @@ func (r *labelSQLRepositoryImpl) Delete(ctx context.Context, issueID, label, act
 		issueID, label,
 	); err != nil {
 		return fmt.Errorf("db: LabelSQLRepository.Delete %s/%s: %w", issueID, label, err)
+	}
+	if err := issueops.TouchIssueRowLock(ctx, r.runner, issueID, opts.UseWispsTable); err != nil {
+		return err
 	}
 	return r.events.Record(ctx, domain.Event{
 		IssueID:  issueID,

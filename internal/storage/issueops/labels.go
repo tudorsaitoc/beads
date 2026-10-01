@@ -152,6 +152,9 @@ func AddLabelInTx(ctx context.Context, tx DBTX, labelTable, eventTable, issueID,
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT IGNORE INTO %s (issue_id, label) VALUES (?, ?)`, labelTable), issueID, label); err != nil {
 		return fmt.Errorf("add label: %w", err)
 	}
+	if err := TouchIssueRowLock(ctx, tx, issueID, labelTable == "wisp_labels"); err != nil {
+		return err
+	}
 	comment := "Added label: " + label
 	//nolint:gosec // G201: eventTable is from WispTableRouting ("events" or "wisp_events")
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (id, issue_id, event_type, actor, comment) VALUES (?, ?, ?, ?, ?)`, eventTable),
@@ -180,10 +183,27 @@ func RemoveLabelInTx(ctx context.Context, tx DBTX, labelTable, eventTable, issue
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE issue_id = ? AND label = ?`, labelTable), issueID, label); err != nil {
 		return fmt.Errorf("remove label: %w", err)
 	}
+	if err := TouchIssueRowLock(ctx, tx, issueID, labelTable == "wisp_labels"); err != nil {
+		return err
+	}
 	comment := "Removed label: " + label
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO %s (id, issue_id, event_type, actor, comment) VALUES (?, ?, ?, ?, ?)`, eventTable),
 		NewEventID(), issueID, types.EventLabelRemoved, actor, comment); err != nil {
 		return fmt.Errorf("remove label: record event: %w", err)
+	}
+	return nil
+}
+
+// TouchIssueRowLock makes label changes collide with transactions guarding the
+// issue's labels. It reuses the existing opaque collision cell, not a revision.
+func TouchIssueRowLock(ctx context.Context, tx DBTX, issueID string, isWisp bool) error {
+	table := "issues"
+	if isWisp {
+		table = "wisps"
+	}
+	//nolint:gosec // G201: table is one of two hardcoded constants
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE %s SET row_lock = ?, updated_at = updated_at WHERE id = ?", table), freshRowLock(), issueID); err != nil {
+		return fmt.Errorf("touch issue row lock for label mutation: %w", err)
 	}
 	return nil
 }

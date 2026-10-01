@@ -634,9 +634,10 @@ func PersistLabels(ctx context.Context, tx *sql.Tx, issue *types.Issue, actor, e
 	if len(issue.Labels) == 0 {
 		return result, nil
 	}
-	labelTable := "labels"
-	if IsWisp(issue) {
-		labelTable = "wisp_labels"
+	issueTable, labelTable := "issues", "labels"
+	isWisp := IsWisp(issue)
+	if isWisp {
+		issueTable, labelTable = "wisps", "wisp_labels"
 	}
 	seen := make(map[string]struct{}, len(issue.Labels))
 	for _, label := range issue.Labels {
@@ -677,6 +678,12 @@ func PersistLabels(ctx context.Context, tx *sql.Tx, issue *types.Issue, actor, e
 			return result, fmt.Errorf("failed to record label event %q for %s: %w", label, issue.ID, err)
 		}
 		result.markChanged(eventTable)
+	}
+	if result.ChangedTables[labelTable] {
+		if err := TouchIssueRowLock(ctx, tx, issue.ID, isWisp); err != nil {
+			return result, err
+		}
+		result.markChanged(issueTable)
 	}
 	return result, nil
 }

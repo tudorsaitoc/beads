@@ -110,6 +110,7 @@ func (r *issueSQLRepositoryImpl) Update(ctx context.Context, id string, updates 
 
 	_, statusChanging := updates["status"]
 	mergeOps := issueops.HasMergeOps(updates)
+	_, metadataChanging := updates["metadata"]
 
 	// When the status changes we need the prior row to reproduce the embedded
 	// lifecycle side effects (issueops.updateIssueInTx): closed_at is set on
@@ -120,7 +121,7 @@ func (r *issueSQLRepositoryImpl) Update(ctx context.Context, id string, updates 
 	// Merge operations (metadata edits, note appends) need the same read: they
 	// are resolved against the row as seen by THIS unit-of-work transaction.
 	var oldIssue *types.Issue
-	if statusChanging || mergeOps {
+	if statusChanging || mergeOps || metadataChanging {
 		var err error
 		oldIssue, err = r.Get(ctx, id, opts)
 		if err != nil {
@@ -141,7 +142,7 @@ func (r *issueSQLRepositoryImpl) Update(ctx context.Context, id string, updates 
 	// caller redoing the whole unit of work on a serialization failure — and
 	// that redo re-runs this in-transaction resolution against the winner's
 	// committed row.
-	if mergeOps {
+	if mergeOps || metadataChanging {
 		resolved, err := issueops.ResolveMergeOps(oldIssue, updates)
 		if err != nil {
 			return fmt.Errorf("db: Update %s: %w", id, err)
@@ -602,13 +603,18 @@ func insertIssueRow(ctx context.Context, runner Runner, table string, issue *typ
 	if err := types.CheckFieldLen("owner", issue.Owner); err != nil {
 		return err
 	}
+	var err error
+	issue, err = issueops.ProtectRefineryClockForUpsert(ctx, runner, table, issue)
+	if err != nil {
+		return err
+	}
 	// Stamp a fresh non-zero row_lock at create, exactly like the classic
 	// insertIssueIntoTable (issueops/helpers.go). Without it a proxied-server
 	// (uow) create leaves row_lock at the schema DEFAULT 0, so the row's
 	// RowVersion CAS token is stale-zero on read — the backend-divergent break
 	// the RowVersion contract (types.Issue.RowVersion) forbids. The duplicate-key
 	// path rewrites it too so an upsert also advances the token.
-	_, err := runner.ExecContext(ctx, fmt.Sprintf(`
+	_, err = runner.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s (
 			id, content_hash, title, description, design, acceptance_criteria, notes,
 			status, priority, issue_type, assignee, estimated_minutes,
